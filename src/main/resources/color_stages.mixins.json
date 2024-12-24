@@ -1,12 +1,17 @@
 {
   "required": true,
   "minVersion": "0.8",
-  "package": "com.blamejared.color-stages.color_stages.mixin",
+  "package": "com.blamejared.colorstages.mixin",
   "compatibilityLevel": "JAVA_8",
-  "refmap": "color-stages.refmap.json",
+  "refmap": "color_stages.refmap.json",
   "mixins": [
   ],
   "client": [
+    "GameRendererAccessor",
+    "TitleScreenAccessor",
+    "MixinGameRenderer",
+    "MixinPostPass",
+    "MixinBrandingControl"
   ],
   "injectors": {
     "defaultRequire": 1

@@ -1,0 +1,30 @@
+{
+  "blend": {
+    "func": "add",
+    "srcrgb": "1",
+    "dstrgb": "1-dstalpha"
+  },
+  "vertex": "colorstages:color",
+  "fragment": "colorstages:color",
+  "attributes": [ "Position" ],
+  "samplers": [
+    { "name": "DiffuseSampler" }
+  ],
+  "uniforms": [
+    { "name": "ProjMat",       "type": "matrix4x4", "count": 16, "values": [ 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0 ] },
+    { "name": "OutSize",       "type": "float",     "count": 2,  "values": [ 1.0, 1.0 ] },
+    { "name": "ColorModulate", "type": "float",     "count": 4,  "values": [ 1.0, 1.0, 1.0, 1.0 ] },
+    { "name": "hideRed",       "type": "int",     "count": 1,  "values": [ 0.0 ] },
+    { "name": "hideOrange",       "type": "int",     "count": 1,  "values": [ 0.0 ] },
+    { "name": "hideBrown",       "type": "int",     "count": 1,  "values": [ 0.0 ] },
+    { "name": "hideYellow",       "type": "int",     "count": 1,  "values": [ 0.0 ] },
+    { "name": "hideGreen",       "type": "int",     "count": 1,  "values": [ 0.0 ] },
+    { "name": "hideLime",       "type": "int",     "count": 1,  "values": [ 0.0 ] },
+    { "name": "hideCyan",       "type": "int",     "count": 1,  "values": [ 0.0 ] },
+    { "name": "hideLightBlue",       "type": "int",     "count": 1,  "values": [ 0.0 ] },
+    { "name": "hideBlue",       "type": "int",     "count": 1,  "values": [ 0.0 ] },
+    { "name": "hideMagenta",       "type": "int",     "count": 1,  "values": [ 0.0 ] },
+    { "name": "hidePurple",       "type": "int",     "count": 1,  "values": [ 0.0 ] },
+    { "name": "hidePink",       "type": "int",     "count": 1,  "values": [ 0.0 ] }
+  ]
+}
