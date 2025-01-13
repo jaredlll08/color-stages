@@ -1,7 +1,7 @@
 #version 150
+#define PI 3.1415926538
 
 uniform sampler2D DiffuseSampler;
-
 uniform vec4 ColorModulate;
 
 uniform int hideRed;
@@ -16,16 +16,76 @@ uniform int hideBlue;
 uniform int hideMagenta;
 uniform int hidePurple;
 uniform int hidePink;
+
 uniform vec2 OutSize;
-
 in vec2 texCoord;
-
-const bool DEBUG = false;
-
 out vec4 fragColor;
 
-vec3 rgb2hsv(vec3 c)
-{
+
+// Number of defined colors (updates loops and array sizes)
+const int CLR_NUM = 14;
+const float ERR_MARGIN = 0.0001;
+// Ouput debug classification colors to screen
+const bool DEBUG_CURS = false;
+const bool DEBUG_SPEC = true;
+
+// Color classification definition
+struct ColorClass {
+    vec3 debugRGB; // DO NOT USE IN RELEASE
+    vec3 hsvMin;
+    vec3 hsvMax;
+    float lerpDist;
+};
+
+// Output classification of the current pixel fragment
+struct FragClass {
+    int color;
+    float lerp;
+};
+
+// === UTILITY FUNCTIONS ===
+
+float smoothStepHSV(vec3 hsvIn, vec3 hsvMin, vec3 hsvMax, float maxDist) {
+    // Get nearest point within classification bounds
+    vec3 nearest = vec3(
+    0.0, // Hue wrapping dealt with separately
+    clamp(hsvIn.y, hsvMin.y, hsvMax.y),
+    clamp(hsvIn.z, hsvMin.z, hsvMax.z)
+    );
+
+    if(hsvMin.x > hsvMax.x) {
+        // Which wrapped edge is closer
+        if(abs(hsvIn.x - hsvMax.x) > abs(hsvMin.x - hsvIn.x)) {
+            // UPPER
+            nearest.x = clamp(hsvIn.x, hsvMin.x, 1.0);
+        } else {
+            // LOWER
+            nearest.x = clamp(hsvIn.x, 0.0, hsvMax.x);
+        }
+    } else {
+        // No wrapping
+        nearest.x = clamp(hsvIn.x, hsvMin.x, hsvMax.x);
+    }
+
+    // Caclculate vec3 distance to that point (manhatten)
+    //vec3 offset = nearest - hsvIn;
+    //abs(offset.x) + abs(offset.y) + abs(offset.z);
+    float dist = distance(nearest, hsvIn);
+    if(maxDist > 0.0) {
+        // Flip and scale linearly based on maximum allowed distance
+        return clamp(dist / maxDist, 0.0, 1.0);
+    } else {
+        // Hard snap off once -ERR_MARGIN < -dist
+        // Cannot be exactly 0.0 due to impossibly small gaps caused by floating point error
+        return 1.0 - step(-ERR_MARGIN, -dist);
+    }
+}
+
+float smoothStepHSV(vec3 hsvIn, ColorClass clr) {
+    return smoothStepHSV(hsvIn, clr.hsvMin, clr.hsvMax, clr.lerpDist);
+}
+
+vec3 rgb2hsv(vec3 c) {
     vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
     vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
     vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
@@ -35,280 +95,103 @@ vec3 rgb2hsv(vec3 c)
     return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
 }
 
-vec3 hsv2rgb(vec3 c)
-{
+vec3 hsv2rgb(vec3 c) {
     vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
     vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
     return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
 }
 
-const vec3 RGB_RED =        vec3(1., 0., 0.);//            #ff0000
-const vec3 RGB_DARK_RED =   vec3(0.7, 0, 0);//             #8B0000
-const vec3 RGB_ORANGE =     vec3(1., 0.647, 0.);//      "#fb6b1d"
-const vec3 RGB_ORANGE_2 =   vec3(1., 0.549, 0.);
-const vec3 RGB_BROWN_2 =    vec3(0.349, 0.22, 0.122);//     "#59381f"
-const vec3 RGB_BROWN =      vec3(0.588, 0.294, 0.);//       "#964B00"
-const vec3 RGB_YELLOW =     vec3(1., 1., 0.);//      "#ffff00"
-const vec3 RGB_YELLOW_2 =   vec3(0.741, 0.718, 0.42);
-const vec3 RGB_GREEN =      vec3(0., 0.502, 0.);//      "#165F16"
-const vec3 RGB_GREEN_2 =    vec3(0.502, 0.502, 0.);
-const vec3 RGB_LIME =       vec3(0.008, 0.992, 0.008);//       "#02FD02"
-const vec3 RGB_CYAN =       vec3(0.188, 0.882, 0.725);//       "#30e1b9"
-const vec3 RGB_LIGHT_BLUE = vec3(0.561, 0.827, 1.);// "#8fd3ff"
-const vec3 RGB_BLUE =       vec3(0., 0.502, 1.);//       "#0080ff"
-const vec3 RGB_MAGENTA =    vec3(1., 0., 1.);//    "#FF00FF"
-const vec3 RGB_PURPLE =     vec3(0.502, 0., 0.502);//     "#800080"
-const vec3 RGB_PINK =       vec3(1., 0.753, 0.796);//       "#FFC0CB"
-const vec3 RGB_BLACK =      vec3(0.);
-const vec3 RGB_WHITE =      vec3(1.);
-const vec3 GRAY =      vec3(0.5);
+// === COLOR CLASSIFICATIONS ===
 
-bool isRedLike(vec3 hsb) {
-    return hsb.r >= 315 || hsb.r < 15;
+const ColorClass COLOR_LIST[CLR_NUM] = ColorClass[CLR_NUM](
+// Debug RGB, Min HSV, Max HSV, Lerp Distance (all values [0.000 - 1.000]).
+// Old hue (value / 360) rounded to 3 decimal places.
+// Overlapping classifications are priority top down
+ColorClass(vec3(0.500, 0.500, 0.500), vec3(0.000, 0.000, 0.000), vec3(0.000, 0.010, 1.000), 0.020), // GRAYSCALE (default)
+ColorClass(vec3(1.000, 0.000, 0.000), vec3(0.875, 0.600, 0.000), vec3(0.042, 1.000, 1.000), 0.020), // RED
+ColorClass(vec3(1.000, 0.753, 0.796), vec3(0.875, 0.000, 0.000), vec3(0.042, 0.600, 1.000), 0.020), // PINK
+ColorClass(vec3(1.000, 0.647, 0.000), vec3(0.042, 0.000, 0.500), vec3(0.111, 1.000, 1.000), 0.020), // ORANGE
+ColorClass(vec3(0.588, 0.294, 0.000), vec3(0.042, 0.000, 0.000), vec3(0.111, 1.000, 0.500), 0.020), // BROWN
+ColorClass(vec3(1.000, 1.000, 0.000), vec3(0.111, 0.000, 0.000), vec3(0.208, 1.000, 1.000), 0.020), // YELLOW
+ColorClass(vec3(0.000, 0.502, 0.000), vec3(0.208, 0.000, 0.000), vec3(0.458, 1.000, 0.450), 0.020), // GREEN
+ColorClass(vec3(0.008, 0.992, 0.008), vec3(0.208, 0.370, 0.000), vec3(0.458, 1.000, 1.000), 0.020), // LIME
+ColorClass(vec3(0.188, 0.882, 0.725), vec3(0.208, 0.000, 0.000), vec3(0.458, 0.370, 1.000), 0.020), // CYAN 1 (green)
+ColorClass(vec3(0.188, 0.882, 0.725), vec3(0.458, 0.300, 0.000), vec3(0.542, 1.000, 1.000), 0.020), // CYAN 2 (blue)
+ColorClass(vec3(0.561, 0.827, 1.000), vec3(0.458, 0.000, 0.000), vec3(0.708, 0.800, 1.000), 0.020), // BLUE LIGHT
+ColorClass(vec3(0.000, 0.502, 1.000), vec3(0.542, 0.800, 0.000), vec3(0.708, 1.000, 1.000), 0.020), // BLUE
+ColorClass(vec3(1.000, 0.000, 1.000), vec3(0.792, 0.000, 0.440), vec3(0.875, 1.000, 1.000), 0.020), // MAGENTA
+ColorClass(vec3(0.502, 0.000, 0.502), vec3(0.708, 0.000, 0.000), vec3(0.875, 1.000, 1.000), 0.020)  // PURPLE
+);
+
+// Index constants
+const int GRAY = 0;
+const int RED = 1;
+const int PINK = 2;
+const int ORANGE = 3;
+const int BROWN = 4;
+const int YELLOW = 5;
+const int GREEN = 6;
+const int LIME = 7;
+const int CYAN_1 = 8;
+const int CYAN_2 = 9;
+const int BLUE_LIGHT = 10;
+const int BLUE = 11;
+const int MAGENTA = 12;
+const int PURPLE = 13;
+
+// Map color index to uniform toggle state.
+// You can map one toggle to multiple colors.
+bool isHidden(int color) {
+    if(color < 0 || color >= CLR_NUM) return false;
+    if(color == RED) return hideRed > 0;
+    if(color == PINK) return hidePink > 0;
+    if(color == ORANGE) return hideOrange > 0;
+    if(color == BROWN) return hideBrown > 0;
+    if(color == YELLOW) return hideYellow > 0;
+    if(color == GREEN) return hideGreen > 0;
+    if(color == LIME) return hideLime > 0;
+    if(color == CYAN_1 || color == CYAN_2) return hideCyan > 0;
+    if(color == BLUE_LIGHT) return hideLightBlue > 0;
+    if(color == BLUE) return hideBlue > 0;
+    if(color == MAGENTA) return hideMagenta > 0;
+    if(color == PURPLE) return hidePurple > 0;
+    return false;
 }
 
-vec3 getRed(vec3 hsb) {
-    float h = hsb.r;
-    float s = hsb.g;
-    float b = hsb.b;
-    if (s < 0.6) {
-        return RGB_PINK;
+FragClass classifyHSV(vec3 diffuseHSV) {
+    int color = -1;
+    float lerp = 1.0;
+
+    float dist;
+    for(int i = 0; i < CLR_NUM; i++) {
+        dist = smoothStepHSV(diffuseHSV, COLOR_LIST[i]);
+        if(color < 0 && dist < ERR_MARGIN) color = i;
+        if(!isHidden(i)) lerp = min(lerp, dist);
     }
-    return RGB_RED;
+
+    return FragClass(color, lerp);
 }
 
-bool isOrangeLike(vec3 hsb) {
-    //TODO brown
-    return hsb.r >= 15 && hsb.r < 40;
-}
-
-vec3 getOrange(vec3 hsb) {
-    float h = hsb.r;
-    float s = hsb.g;
-    float b = hsb.b;
-    if (b < 0.5) {
-        return RGB_BROWN;
-    }
-    return RGB_ORANGE;
-}
-
-bool isYellowLike(vec3 hsb) {
-    //TODO light gray
-    return hsb.r >= 40 && hsb.r < 75;
-}
-
-vec3 getYellow(vec3 hsb) {
-    float h = hsb.r;
-    float s = hsb.g;
-    float b = hsb.b;
-    if (s < 0.1) {
-      //  return GRAY;
-    }
-    return RGB_YELLOW;
-}
-
-bool isGreenLike(vec3 hsb) {
-    //TODO does lime dye
-    return hsb.r >= 75 && hsb.r < 165;
-}
-
-vec3 getGreen(vec3 hsb) {
-    float h = hsb.r;
-    float s = hsb.g;
-    float b = hsb.b;
-    if (b > 0.45) {
-        if (s > 0.37) {
-            return RGB_LIME;
-        } else {
-            return RGB_CYAN;
-        }
-    }
-    return RGB_GREEN;
-}
-
-bool isCyanLike(vec3 hsb) {
-    //TODO does light blue wool
-    // TODO does white wool
-    return hsb.r >= 165 && hsb.r < 195;
-}
-
-vec3 getCyan(vec3 hsb) {
-    float h = hsb.r;
-    float s = hsb.g;
-    float b = hsb.b;
-    if (s < 0.1) {
-       // TODO 11/25/24 confirm this is right
-       // return RGB_WHITE;
-    }
-    if (s < 0.15) {
-       // TODO 11/25/24 confirm this is right
-       // return GRAY;
-    }
-    if (s < 0.3) {
-        return RGB_LIGHT_BLUE;
-    }
-    return RGB_CYAN;
-}
-
-bool isLightBlueLike(vec3 hsb) {
-    //TODO does blue dye
-    //TODO does gray and black dye
-    return hsb.r >= 195 && hsb.r < 225;
-}
-
-vec3 getLightBlue(vec3 hsb) {
-    float h = hsb.r;
-    float s = hsb.g;
-    float b = hsb.b;
-    if (s > 0.8) {
-        return RGB_BLUE;
-    }
-    // TODO 11/25/24 confirm this is right
-    // if (s < 0.1) {
-    //    return RGB_WHITE;
-    // }
-    if (s < 0.5) {
-        if (b < 0.32) {
-            return RGB_CYAN;
-        }
-    }
-
-    return RGB_LIGHT_BLUE;
-}
-
-
-bool isBlueLike(vec3 hsb) {
-    //TODO doesn't do blue dye
-    //TODO does black wool?
-    return hsb.r >= 225 && hsb.r < 255;
-}
-
-vec3 getBlue(vec3 hsb) {
-    float h = hsb.r;
-    float s = hsb.g;
-    float b = hsb.b;
-    return RGB_BLUE;
-}
-
-bool isPurpleLike(vec3 hsb) {
-    return hsb.r >= 255 && hsb.r < 285;
-}
-
-vec3 getPurple(vec3 hsb) {
-    float h = hsb.r;
-    float s = hsb.g;
-    float b = hsb.b;
-    return RGB_PURPLE;
-}
-
-bool isMagentaLike(vec3 hsb) {
-    //TODO does purple dye
-    return hsb.r >= 285 && hsb.r < 315;
-}
-
-vec3 getMagenta(vec3 hsb) {
-    float h = hsb.r;
-    float s = hsb.g;
-    float b = hsb.b;
-    if (b <= 0.44) {
-        return RGB_PURPLE;
-    }
-    return RGB_MAGENTA;
-}
-
-vec3 classifyHSB(vec3 actual) {
-    vec3 hsb = rgb2hsv(actual);
-    hsb.r *= 360.;
-    if (hsb.g == 0) {
-        return actual;
-    }
-    if (isRedLike(hsb)) {
-        return getRed(hsb);
-    }
-    if (isOrangeLike(hsb)) {
-        return getOrange(hsb);
-    }
-    if (isYellowLike(hsb)) {
-        return getYellow(hsb);
-    }
-    if (isGreenLike(hsb)) {
-        return getGreen(hsb);
-    }
-    if (isBlueLike(hsb)) {
-        return getBlue(hsb);
-    }
-    if (isMagentaLike(hsb)) {
-        return getMagenta(hsb);
-    }
-    if (isPurpleLike(hsb)) {
-        return getPurple(hsb);
-    }
-    if (isLightBlueLike(hsb)) {
-        return getLightBlue(hsb);
-    }
-
-    if (isCyanLike(hsb)) {
-        return getCyan(hsb);
-    }
-    return actual;
-}
+// === MAIN ===
 
 void main() {
+
     vec4 color = texture(DiffuseSampler, texCoord) * ColorModulate;
-    vec3 outCol = color.rgb;
-    bool isGray = false;
-    vec3 closestCol = classifyHSB(color.rgb);
+    FragClass clrClass = classifyHSV(rgb2hsv(color.rgb));
 
-    if (hideRed == 1 && closestCol == RGB_RED) {
-        isGray = true;
-    }
-    if (hideOrange == 1 && closestCol == RGB_ORANGE) {
-        isGray = true;
-    }
-    if (hideBrown == 1 && closestCol == RGB_BROWN) {
-        isGray = true;
-    }
-    if (hideYellow == 1 && closestCol == RGB_YELLOW) {
-        isGray = true;
-    }
-    if (hideGreen == 1 && closestCol == RGB_GREEN) {
-        isGray = true;
-    }
-    if (hideLime == 1 && closestCol == RGB_LIME) {
-        isGray = true;
-    }
-    if (hideCyan == 1 && closestCol == RGB_CYAN) {
-        isGray = true;
-    }
-    if (hideLightBlue == 1 && closestCol == RGB_LIGHT_BLUE) {
-        isGray = true;
-    }
-    if (hideBlue == 1 && closestCol == RGB_BLUE) {
-        isGray = true;
-    }
-    if (hideMagenta == 1 && closestCol == RGB_MAGENTA) {
-        isGray = true;
-    }
-    if (hidePurple == 1 && closestCol == RGB_PURPLE) {
-        isGray = true;
-    }
-    if (hidePink == 1 && closestCol == RGB_PINK) {
-        isGray = true;
-    }
 
-    if (isGray) {
-        outCol = vec3(dot(color.rgb, vec3(0.299, 0.587, 0.114)));
-    }
-
-    if (DEBUG) {
-        vec4 middle = texture(DiffuseSampler, vec2(0.5, 0.5)) * ColorModulate;
-        if (texCoord.x > 0.55 && texCoord.x < 0.6 && texCoord.y > 0.55 && texCoord.y < 0.6) {
-            fragColor = vec4(classifyHSB(vec3(1) - middle.rgb), color.a);
-        } else {
-            fragColor = vec4(outCol, color.a);
-        }
-        //    fragColor = vec4(classifyHSB(color.rgb), color.a);
+    if(clrClass.color < 0) {
+        // Unclassified. Passthrough original color
+        fragColor = color;
     } else {
-        fragColor = vec4(outCol, color.a);
+        vec4 clrOut = color;
+        if (isHidden(clrClass.color)) {
+            // Convert to grayscale
+            clrOut = vec4(dot(color.rgb, vec3(0.299, 0.587, 0.114)));
+            // Mix color back in based on classification distance
+            clrOut = mix(color, clrOut, clrClass.lerp);
+            clrOut.a = color.a;
+        }
+        fragColor = clrOut;
     }
 }
