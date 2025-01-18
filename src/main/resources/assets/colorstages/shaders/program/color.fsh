@@ -45,7 +45,7 @@ struct FragClass {
 
 // === UTILITY FUNCTIONS ===
 
-float smoothStepHSV(vec3 hsvIn, vec3 hsvMin, vec3 hsvMax, float maxDist) {
+float smoothStepHSV(const vec3 hsvIn, const vec3 hsvMin, const vec3 hsvMax, const float maxDist) {
     // Get nearest point within classification bounds
     vec3 nearest = vec3(
     0.0, // Hue wrapping dealt with separately
@@ -81,7 +81,7 @@ float smoothStepHSV(vec3 hsvIn, vec3 hsvMin, vec3 hsvMax, float maxDist) {
     }
 }
 
-float smoothStepHSV(vec3 hsvIn, ColorClass clr) {
+float smoothStepHSV(vec3 hsvIn, const ColorClass clr) {
     return smoothStepHSV(hsvIn, clr.hsvMin, clr.hsvMax, clr.lerpDist);
 }
 
